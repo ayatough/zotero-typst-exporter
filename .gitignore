@@ -1,0 +1,20 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+.Python
+*.egg-info/
+.eggs/
+*.egg
+.venv/
+
+# Environment variables
+.env
+
+# Cache
+.cache/
+assets/
+
+# IDE
+.vscode/
+.idea/

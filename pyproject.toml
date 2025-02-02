@@ -1,0 +1,37 @@
+[project]
+name = "zotero-typst-exporter"
+version = "0.1.0"
+authors = [
+    { name = "qython", email = "modest.simple.life@gmail.com" }
+]
+description = "CLI tool for exporting Zotero annotations to Typst"
+readme = "README.md"
+dependencies = [
+    "typer",
+    "rich",
+    "pyzotero",
+    "python-dotenv",
+    "PyMuPDF",  # fitz
+    "requests",
+    "bibtexparser",
+]
+requires-python = ">=3.9"
+
+[project.scripts]
+zotero-typst-exporter = "zotero_typst_exporter:app"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.rye]
+managed = true
+dev-dependencies = [
+    "pytest",
+    "black",
+    "isort",
+    "ruff",
+]
+
+[tool.hatch.build.targets.wheel]
+packages = ["."]
