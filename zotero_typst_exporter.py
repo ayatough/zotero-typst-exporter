@@ -19,8 +19,8 @@ from rich.table import Table
 
 app = typer.Typer(
     help="CLI tool for exporting Zotero annotations to Typst",
-    no_args_is_help=True,  # Show help when no arguments are provided
-    context_settings={"help_option_names": ["-h", "--help"]},  # Enable -h for help
+    no_args_is_help=True,
+    context_settings={"help_option_names": ["-h", "--help"]},
 )
 
 
@@ -56,7 +56,7 @@ def app_callback(
     prop.WEBDAV_USERNAME = os.getenv("ZOTERO_WEBDAV_USERNAME")
     prop.WEBDAV_PASSWORD = os.getenv("ZOTERO_WEBDAV_PASSWORD")
 
-    # キャッシュディレクトリの作成
+    # Create cache directory
     prop.CACHE_DIR.mkdir(parents=True, exist_ok=True)
 
     library_id = prop.USER_ID
@@ -69,7 +69,6 @@ def collections():
     """Display list of collections"""
     assert prop.zot is not None
 
-    # テーブルの作成
     table = Table(title="Zotero Collections")
     table.add_column("ID", style="cyan")
     table.add_column("Name", style="green")
@@ -93,7 +92,7 @@ def collections():
         console.print(table)
 
     except Exception as e:
-        typer.echo(f"エラーが発生しました: {str(e)}", err=True)
+        typer.echo(f"Error: {str(e)}", err=True)
         raise typer.Exit(1)
 
 
@@ -114,7 +113,6 @@ def items(collection_id: str = typer.Argument(..., help="Collection ID")):
 
         for item in items:
             data = item["data"]
-            # 著者名の取得
             authors = []
             for creator in data.get("creators", []):
                 if "firstName" in creator and "lastName" in creator:
@@ -122,7 +120,6 @@ def items(collection_id: str = typer.Argument(..., help="Collection ID")):
                 elif "name" in creator:
                     authors.append(creator["name"])
 
-            # 日付の処理
             year, month = parse_date(data.get("date", ""))
             date_str = f"{year}-{month}" if year and month else year or ""
 
@@ -138,7 +135,7 @@ def items(collection_id: str = typer.Argument(..., help="Collection ID")):
         console.print(table)
 
     except Exception as e:
-        typer.echo(f"エラーが発生しました: {str(e)}", err=True)
+        typer.echo(f"Error: {str(e)}", err=True)
         raise typer.Exit(1)
 
 
@@ -151,7 +148,7 @@ def annotations(item_id: str = typer.Argument(..., help="Item ID")):
     table.add_column("Type", style="cyan")
     table.add_column("Text", style="green", max_width=60)
     table.add_column("Comment", style="yellow", max_width=40)
-    table.add_column("Tags", style="red")  # タグ列を追加
+    table.add_column("Tags", style="red")
     table.add_column("Page", style="blue")
 
     try:
@@ -164,7 +161,7 @@ def annotations(item_id: str = typer.Argument(..., help="Item ID")):
         ]
 
         if not pdf_items:
-            typer.echo("PDFアタッチメントが見つかりませんでした。")
+            typer.echo("No PDF attachments found.")
             raise typer.Exit(1)
 
         for pdf_item in pdf_items:
@@ -180,17 +177,14 @@ def annotations(item_id: str = typer.Argument(..., help="Item ID")):
                 text = data.get("annotationText", "")
                 comment = data.get("annotationComment", "")
 
-                # タグの取得
                 tags = ", ".join(t["tag"] for t in data.get("tags", []))
 
-                # アノテーションタイプに応じたテキスト装飾
                 formatted_text = ""
                 if anno_type == "highlight":
                     formatted_text = f"[on {color}]{text}[/]"
                 elif anno_type in ["underline", "image", "note"]:
                     formatted_text = f"[u {color}]{text or '<' + anno_type + '>'}[/]"
 
-                # ページ情報の取得
                 position = eval(data.get("annotationPosition", "{}"))
                 page = position.get("pageIndex", 0) + 1 if position else ""
 
@@ -198,7 +192,7 @@ def annotations(item_id: str = typer.Argument(..., help="Item ID")):
                     anno_type,
                     formatted_text,
                     comment,
-                    tags,  # タグ列を追加
+                    tags,
                     str(page),
                 )
 
@@ -206,15 +200,18 @@ def annotations(item_id: str = typer.Argument(..., help="Item ID")):
         console.print(table)
 
     except Exception as e:
-        typer.echo(f"エラーが発生しました: {str(e)}", err=True)
+        typer.echo(f"Error: {str(e)}", err=True)
         raise typer.Exit(1)
 
 
 @app.command()
 def export_annotations(
-    item_id: str = typer.Argument(..., help="文献ID"),
+    item_id: str = typer.Argument(..., help="Item ID"),
     output_dir: Path = typer.Option(
-        Path("assets"), "--output-dir", "-o", help="Output directory for annotations"
+        Path("assets"),
+        "--output-dir",
+        "-o",
+        help="Output directory for annotations",
     ),
 ):
     """Export annotations from a specific item"""
@@ -227,10 +224,10 @@ def export_annotations(
         typst_output = output_dir / "annotations.typ"
         write_typst_annotations(papers, typst_output)
 
-        typer.echo(f"アノテーションを {typst_output} にエクスポートしました。")
+        typer.echo(f"Annotations exported to {typst_output}")
 
     except Exception as e:
-        typer.echo(f"エラーが発生しました: {str(e)}", err=True)
+        typer.echo(f"Error: {str(e)}", err=True)
         raise typer.Exit(1)
 
 
@@ -238,7 +235,10 @@ def export_annotations(
 def export_collection_annotations(
     collection_id: str = typer.Argument(..., help="Collection ID"),
     output_dir: Path = typer.Option(
-        Path("assets"), "--output-dir", "-o", help="Output directory for annotations"
+        Path("assets"),
+        "--output-dir",
+        "-o",
+        help="Output directory for annotations",
     ),
 ):
     """Export annotations from all items in a collection"""
@@ -247,30 +247,28 @@ def export_collection_annotations(
     output_dir.mkdir(parents=True, exist_ok=True)
 
     try:
-        # コレクションのトップレベルアイテムを取得
         items = prop.zot.collection_items_top(collection_id)
         papers = {}
 
-        with typer.progressbar(items, label="文献のアノテーションを処理中") as progress:
+        with typer.progressbar(items, label="Processing items") as progress:
             for item in progress:
                 paper_key = item["key"]
                 citation_key, paper_info = process_item_annotations(
                     paper_key, output_dir
                 )
 
-                if paper_info["annotations"]:  # アノテーションがある文献のみ追加
+                if paper_info["annotations"]:
                     papers[citation_key] = paper_info
 
-        # Typst変数としてエクスポート
         typst_output = output_dir / "collection_annotations.typ"
         write_typst_annotations(papers, typst_output)
 
-        typer.echo(f"\nアノテーションを {typst_output} にエクスポートしました。")
-        typer.echo(f"処理された文献数: {len(items)}")
-        typer.echo(f"アノテーションを含む文献数: {len(papers)}")
+        typer.echo(f"\nAnnotations exported to {typst_output}")
+        typer.echo(f"Total items processed: {len(items)}")
+        typer.echo(f"Items with annotations: {len(papers)}")
 
     except Exception as e:
-        typer.echo(f"エラーが発生しました: {str(e)}", err=True)
+        typer.echo(f"Error: {str(e)}", err=True)
         raise typer.Exit(1)
 
 
@@ -278,38 +276,35 @@ def export_collection_annotations(
 def export_bibtex(
     collection_id: str = typer.Argument(..., help="Collection ID"),
     output_file: Path = typer.Option(
-        Path("references.bib"), "--output", "-o", help="Path to output BibTeX file"
+        Path("references.bib"),
+        "--output",
+        "-o",
+        help="Path to output BibTeX file",
     ),
 ):
     """Export items in a collection as BibTeX"""
     assert prop.zot is not None
 
     try:
-        # コレクションのトップレベルアイテムを取得
         items = prop.zot.collection_items_top(collection_id)
 
         successful_exports = 0
         all_entries = []
 
-        with typer.progressbar(items, label="BibTeXをエクスポート中") as progress:
+        with typer.progressbar(items, label="Exporting BibTeX") as progress:
             for item in progress:
                 try:
-                    # bibtexparserオブジェクトを取得
                     bib_data = prop.zot.item(item["key"], format="bibtex")
-                    # entriesプロパティから引用情報を取得
                     entries = bib_data.entries
                     if entries:
                         all_entries.extend(entries)
                         successful_exports += 1
                 except Exception as e:
                     title = item["data"].get("title", "Unknown Title")
-                    typer.echo(
-                        f"\nWarning: アイテム「{title}」の処理中にエラー: {str(e)}"
-                    )
+                    typer.echo(f"\nWarning: Error processing item '{title}': {str(e)}")
                     continue
 
         if all_entries:
-            # bibtexparserオブジェクトを作成して書き出し
             from bibtexparser.bwriter import BibTexWriter
             from bibtexparser.bibdatabase import BibDatabase
 
@@ -320,15 +315,15 @@ def export_bibtex(
             with open(output_file, "w", encoding="utf-8") as f:
                 f.write(writer.write(db))
 
-            typer.echo(f"\nBibTeXを {output_file} にエクスポートしました。")
-            typer.echo(f"処理されたアイテム数: {len(items)}")
-            typer.echo(f"成功したエクスポート数: {successful_exports}")
+            typer.echo(f"\nBibTeX exported to {output_file}")
+            typer.echo(f"Total items: {len(items)}")
+            typer.echo(f"Successfully exported: {successful_exports}")
         else:
-            typer.echo("エクスポートできたアイテムがありませんでした。")
+            typer.echo("No items were exported.")
             raise typer.Exit(1)
 
     except Exception as e:
-        typer.echo(f"エラーが発生しました: {str(e)}")
+        typer.echo(f"Error: {str(e)}")
         raise typer.Exit(1)
 
 
