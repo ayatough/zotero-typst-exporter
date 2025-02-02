@@ -64,69 +64,6 @@ def app_callback(
     prop.zot = zotero.Zotero(library_id, library_type, prop.API_KEY)
 
 
-def get_cached_pdf(attachment_id: str) -> fitz.Document:
-    """
-    PDFをキャッシュから取得、なければダウンロードして保存
-    """
-    cache_path = prop.CACHE_DIR / f"{attachment_id}.pdf"
-
-    if not cache_path.exists():
-        # WebDAVからZIPをダウンロード
-        zip_url = f"{prop.WEBDAV_URL}/zotero/{attachment_id}.zip"
-        response = requests.get(
-            zip_url, auth=(prop.WEBDAV_USERNAME, prop.WEBDAV_PASSWORD)
-        )
-        response.raise_for_status()
-
-        # ZIPからPDFを抽出
-        with ZipFile(BytesIO(response.content)) as zipped:
-            pdf_name = next(name for name in zipped.namelist() if name.endswith(".pdf"))
-            pdf_data = zipped.read(pdf_name)
-
-            # キャッシュとして保存
-            cache_path.write_bytes(pdf_data)
-
-    # PDFを返す
-    return fitz.open(cache_path)
-
-
-def parse_date(date_str: str) -> tuple[str, str]:
-    """
-    様々な形式の日付文字列から年と月を抽出する
-
-    Args:
-        date_str: 日付文字列
-
-    Returns:
-        tuple[str, str]: (年, 月)のタプル。取得できない場合は空文字列
-    """
-    if not date_str:
-        return "", ""
-
-    # ISOフォーマット (2025-01-19T23:25:38Z) の処理
-    if "T" in date_str:
-        try:
-            dt = datetime.fromisoformat(date_str.replace("Z", "+00:00"))
-            return str(dt.year), str(dt.month).zfill(2)
-        except ValueError:
-            pass
-
-    # YYYY-MM-DD, YYYY/MM/DD, YYYY-MM の処理
-    patterns = [
-        r"(\d{4})[/-](\d{2})(?:[/-]\d{2})?",  # 2024-06-19 or 2024/06/19 or 2024-06
-    ]
-
-    for pattern in patterns:
-        if match := re.search(pattern, date_str):
-            return match.group(1), match.group(2)
-
-    # 日本語形式 (10月 23, 2023) の処理
-    if match := re.search(r"(\d{1,2})月\s+\d{1,2},\s+(\d{4})", date_str):
-        return match.group(2), str(int(match.group(1))).zfill(2)
-
-    return "", ""
-
-
 @app.command()
 def collections():
     """Display list of collections"""
@@ -271,6 +208,191 @@ def annotations(item_id: str = typer.Argument(..., help="Item ID")):
     except Exception as e:
         typer.echo(f"エラーが発生しました: {str(e)}", err=True)
         raise typer.Exit(1)
+
+
+@app.command()
+def export_annotations(
+    item_id: str = typer.Argument(..., help="文献ID"),
+    output_dir: Path = typer.Option(
+        Path("assets"), "--output-dir", "-o", help="Output directory for annotations"
+    ),
+):
+    """Export annotations from a specific item"""
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    try:
+        citation_key, paper_info = process_item_annotations(item_id, output_dir)
+        papers = {citation_key: paper_info}
+
+        typst_output = output_dir / "annotations.typ"
+        write_typst_annotations(papers, typst_output)
+
+        typer.echo(f"アノテーションを {typst_output} にエクスポートしました。")
+
+    except Exception as e:
+        typer.echo(f"エラーが発生しました: {str(e)}", err=True)
+        raise typer.Exit(1)
+
+
+@app.command()
+def export_collection_annotations(
+    collection_id: str = typer.Argument(..., help="Collection ID"),
+    output_dir: Path = typer.Option(
+        Path("assets"), "--output-dir", "-o", help="Output directory for annotations"
+    ),
+):
+    """Export annotations from all items in a collection"""
+    assert prop.zot is not None
+
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    try:
+        # コレクションのトップレベルアイテムを取得
+        items = prop.zot.collection_items_top(collection_id)
+        papers = {}
+
+        with typer.progressbar(items, label="文献のアノテーションを処理中") as progress:
+            for item in progress:
+                paper_key = item["key"]
+                citation_key, paper_info = process_item_annotations(
+                    paper_key, output_dir
+                )
+
+                if paper_info["annotations"]:  # アノテーションがある文献のみ追加
+                    papers[citation_key] = paper_info
+
+        # Typst変数としてエクスポート
+        typst_output = output_dir / "collection_annotations.typ"
+        write_typst_annotations(papers, typst_output)
+
+        typer.echo(f"\nアノテーションを {typst_output} にエクスポートしました。")
+        typer.echo(f"処理された文献数: {len(items)}")
+        typer.echo(f"アノテーションを含む文献数: {len(papers)}")
+
+    except Exception as e:
+        typer.echo(f"エラーが発生しました: {str(e)}", err=True)
+        raise typer.Exit(1)
+
+
+@app.command()
+def export_bibtex(
+    collection_id: str = typer.Argument(..., help="Collection ID"),
+    output_file: Path = typer.Option(
+        Path("references.bib"), "--output", "-o", help="Path to output BibTeX file"
+    ),
+):
+    """Export items in a collection as BibTeX"""
+    assert prop.zot is not None
+
+    try:
+        # コレクションのトップレベルアイテムを取得
+        items = prop.zot.collection_items_top(collection_id)
+
+        successful_exports = 0
+        all_entries = []
+
+        with typer.progressbar(items, label="BibTeXをエクスポート中") as progress:
+            for item in progress:
+                try:
+                    # bibtexparserオブジェクトを取得
+                    bib_data = prop.zot.item(item["key"], format="bibtex")
+                    # entriesプロパティから引用情報を取得
+                    entries = bib_data.entries
+                    if entries:
+                        all_entries.extend(entries)
+                        successful_exports += 1
+                except Exception as e:
+                    title = item["data"].get("title", "Unknown Title")
+                    typer.echo(
+                        f"\nWarning: アイテム「{title}」の処理中にエラー: {str(e)}"
+                    )
+                    continue
+
+        if all_entries:
+            # bibtexparserオブジェクトを作成して書き出し
+            from bibtexparser.bwriter import BibTexWriter
+            from bibtexparser.bibdatabase import BibDatabase
+
+            db = BibDatabase()
+            db.entries = all_entries
+
+            writer = BibTexWriter()
+            with open(output_file, "w", encoding="utf-8") as f:
+                f.write(writer.write(db))
+
+            typer.echo(f"\nBibTeXを {output_file} にエクスポートしました。")
+            typer.echo(f"処理されたアイテム数: {len(items)}")
+            typer.echo(f"成功したエクスポート数: {successful_exports}")
+        else:
+            typer.echo("エクスポートできたアイテムがありませんでした。")
+            raise typer.Exit(1)
+
+    except Exception as e:
+        typer.echo(f"エラーが発生しました: {str(e)}")
+        raise typer.Exit(1)
+
+
+def get_cached_pdf(attachment_id: str) -> fitz.Document:
+    """
+    PDFをキャッシュから取得、なければダウンロードして保存
+    """
+    cache_path = prop.CACHE_DIR / f"{attachment_id}.pdf"
+
+    if not cache_path.exists():
+        # WebDAVからZIPをダウンロード
+        zip_url = f"{prop.WEBDAV_URL}/zotero/{attachment_id}.zip"
+        response = requests.get(
+            zip_url, auth=(prop.WEBDAV_USERNAME, prop.WEBDAV_PASSWORD)
+        )
+        response.raise_for_status()
+
+        # ZIPからPDFを抽出
+        with ZipFile(BytesIO(response.content)) as zipped:
+            pdf_name = next(name for name in zipped.namelist() if name.endswith(".pdf"))
+            pdf_data = zipped.read(pdf_name)
+
+            # キャッシュとして保存
+            cache_path.write_bytes(pdf_data)
+
+    # PDFを返す
+    return fitz.open(cache_path)
+
+
+def parse_date(date_str: str) -> tuple[str, str]:
+    """
+    様々な形式の日付文字列から年と月を抽出する
+
+    Args:
+        date_str: 日付文字列
+
+    Returns:
+        tuple[str, str]: (年, 月)のタプル。取得できない場合は空文字列
+    """
+    if not date_str:
+        return "", ""
+
+    # ISOフォーマット (2025-01-19T23:25:38Z) の処理
+    if "T" in date_str:
+        try:
+            dt = datetime.fromisoformat(date_str.replace("Z", "+00:00"))
+            return str(dt.year), str(dt.month).zfill(2)
+        except ValueError:
+            pass
+
+    # YYYY-MM-DD, YYYY/MM/DD, YYYY-MM の処理
+    patterns = [
+        r"(\d{4})[/-](\d{2})(?:[/-]\d{2})?",  # 2024-06-19 or 2024/06/19 or 2024-06
+    ]
+
+    for pattern in patterns:
+        if match := re.search(pattern, date_str):
+            return match.group(1), match.group(2)
+
+    # 日本語形式 (10月 23, 2023) の処理
+    if match := re.search(r"(\d{1,2})月\s+\d{1,2},\s+(\d{4})", date_str):
+        return match.group(2), str(int(match.group(1))).zfill(2)
+
+    return "", ""
 
 
 def convert_pdf_rect(page, rect):
@@ -430,128 +552,6 @@ def write_typst_annotations(papers: dict, output_path: Path):
             f.write("    ),\n")
             f.write("  ),\n")
         f.write(")\n")
-
-
-@app.command()
-def export_annotations(
-    item_id: str = typer.Argument(..., help="文献ID"),
-    output_dir: Path = typer.Option(
-        Path("assets"), "--output-dir", "-o", help="Output directory for annotations"
-    ),
-):
-    """Export annotations from a specific item"""
-    output_dir.mkdir(parents=True, exist_ok=True)
-
-    try:
-        citation_key, paper_info = process_item_annotations(item_id, output_dir)
-        papers = {citation_key: paper_info}
-
-        typst_output = output_dir / "annotations.typ"
-        write_typst_annotations(papers, typst_output)
-
-        typer.echo(f"アノテーションを {typst_output} にエクスポートしました。")
-
-    except Exception as e:
-        typer.echo(f"エラーが発生しました: {str(e)}", err=True)
-        raise typer.Exit(1)
-
-
-@app.command()
-def export_collection_annotations(
-    collection_id: str = typer.Argument(..., help="Collection ID"),
-    output_dir: Path = typer.Option(
-        Path("assets"), "--output-dir", "-o", help="Output directory for annotations"
-    ),
-):
-    """Export annotations from all items in a collection"""
-    assert prop.zot is not None
-
-    output_dir.mkdir(parents=True, exist_ok=True)
-
-    try:
-        # コレクションのトップレベルアイテムを取得
-        items = prop.zot.collection_items_top(collection_id)
-        papers = {}
-
-        with typer.progressbar(items, label="文献のアノテーションを処理中") as progress:
-            for item in progress:
-                paper_key = item["key"]
-                citation_key, paper_info = process_item_annotations(
-                    paper_key, output_dir
-                )
-
-                if paper_info["annotations"]:  # アノテーションがある文献のみ追加
-                    papers[citation_key] = paper_info
-
-        # Typst変数としてエクスポート
-        typst_output = output_dir / "collection_annotations.typ"
-        write_typst_annotations(papers, typst_output)
-
-        typer.echo(f"\nアノテーションを {typst_output} にエクスポートしました。")
-        typer.echo(f"処理された文献数: {len(items)}")
-        typer.echo(f"アノテーションを含む文献数: {len(papers)}")
-
-    except Exception as e:
-        typer.echo(f"エラーが発生しました: {str(e)}", err=True)
-        raise typer.Exit(1)
-
-
-@app.command()
-def export_bibtex(
-    collection_id: str = typer.Argument(..., help="Collection ID"),
-    output_file: Path = typer.Option(
-        Path("references.bib"), "--output", "-o", help="Path to output BibTeX file"
-    ),
-):
-    """Export items in a collection as BibTeX"""
-    assert prop.zot is not None
-
-    try:
-        # コレクションのトップレベルアイテムを取得
-        items = prop.zot.collection_items_top(collection_id)
-
-        successful_exports = 0
-        all_entries = []
-
-        with typer.progressbar(items, label="BibTeXをエクスポート中") as progress:
-            for item in progress:
-                try:
-                    # bibtexparserオブジェクトを取得
-                    bib_data = prop.zot.item(item["key"], format="bibtex")
-                    # entriesプロパティから引用情報を取得
-                    entries = bib_data.entries
-                    if entries:
-                        all_entries.extend(entries)
-                        successful_exports += 1
-                except Exception as e:
-                    title = item["data"].get("title", "Unknown Title")
-                    typer.echo(
-                        f"\nWarning: アイテム「{title}」の処理中にエラー: {str(e)}"
-                    )
-                    continue
-
-        if all_entries:
-            # bibtexparserオブジェクトを作成して書き出し
-            from bibtexparser.bwriter import BibTexWriter
-            from bibtexparser.bibdatabase import BibDatabase
-
-            db = BibDatabase()
-            db.entries = all_entries
-
-            writer = BibTexWriter()
-            with open(output_file, "w", encoding="utf-8") as f:
-                f.write(writer.write(db))
-
-            typer.echo(f"\nBibTeXを {output_file} にエクスポートしました。")
-            typer.echo(f"処理されたアイテム数: {len(items)}")
-            typer.echo(f"成功したエクスポート数: {successful_exports}")
-        else:
-            typer.echo("エクスポートできたアイテムがありませんでした。")
-            raise typer.Exit(1)
-
-    except Exception as e:
-        typer.echo(f"エラーが発生しました: {str(e)}")
-        raise typer.Exit(1)
 
 
 if __name__ == "__main__":
